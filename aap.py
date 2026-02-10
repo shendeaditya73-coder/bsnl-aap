@@ -4,20 +4,19 @@ import re
 from datetime import datetime
 import io
 
-st.set_page_config(page_title="BSNL 100% Accuracy Polisher", layout="centered")
-st.title("📱 BSNL Strict Link Polisher")
+st.set_page_config(page_title="BSNL Perfect Polisher", layout="centered")
+st.title("📱 BSNL Strict Monthly Polisher")
 
 def format_duration(seconds):
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     return f"{int(h):02}:{int(m):02}:{int(s):02}"
 
-# UI Reset
-if st.button("🔄 Clear App Cache"):
+if st.button("🔄 Reset App"):
     st.cache_data.clear()
     st.rerun()
 
-uploaded_file = st.file_uploader("Upload BSNL Status File", type=['xlsx', 'csv'])
+uploaded_file = st.file_uploader("Upload Raw BSNL File", type=['xlsx', 'csv'])
 
 if uploaded_file:
     if uploaded_file.name.endswith('.csv'):
@@ -55,62 +54,64 @@ if uploaded_file:
             months = sorted(full_df['MonthYear'].unique(), key=lambda x: datetime.strptime(x, '%B %Y'), reverse=True)
             selected_month = st.selectbox("📅 Select Month:", months)
             
-            if st.button("🚀 Generate Final Report"):
-                # 1. Filter by Month
-                df_month = full_df[full_df['MonthYear'] == selected_month].copy()
+            if st.button("🚀 Generate Perfect Pairs"):
+                # 1. Monthly Filter
+                df_m = full_df[full_df['MonthYear'] == selected_month].copy()
                 
-                # 2. STRICT STATE FILTER (The Fix for 100% Accuracy)
-                # We sort by object and time, then only keep rows where the status CHANGES.
-                df_month = df_month.sort_values(['Object', 'dt'], ascending=True)
-                df_month['prev_info'] = df_month.groupby('Object')['Information'].shift(1)
-                # Only keep if current Information is NOT equal to previous Information for that port
-                df_filtered = df_month[df_month['Information'] != df_month['prev_info']].copy()
+                # 2. Strict State Transition (Remove same-status duplicates)
+                df_m = df_m.sort_values(['Object', 'dt'], ascending=True)
+                df_m['prev_info'] = df_m.groupby('Object')['Information'].shift(1)
+                df_filtered = df_m[df_m['Information'] != df_m['prev_info']].copy()
 
-                final_list = []
+                final_rows = []
                 total_sec = 0
                 
-                # 3. Pairing Engine
-                # Now that noise is gone, we can safely pair Down and Clear
+                # 3. Strict Pairing Engine (Keep ONLY Completed Pairs)
                 for obj_name, group in df_filtered.groupby('Object'):
                     group = group.sort_values('dt', ascending=False)
                     i = 0
                     while i < len(group):
                         row = group.iloc[i].copy()
+                        # Only start if we find a 'Cleared' event
                         if row['Information'] == "Cleared Link Down":
-                            # Look for the immediate preceding Down
                             if i + 1 < len(group) and group.iloc[i+1]['Information'] == "Link Down":
                                 down_row = group.iloc[i+1].copy()
-                                sec = int((row['dt'] - down_row['dt']).total_seconds())
-                                total_sec += sec
-                                row['Outage Hours'] = format_duration(sec)
+                                
+                                # Math for duration
+                                diff = int((row['dt'] - down_row['dt']).total_seconds())
+                                total_sec += diff
+                                
+                                row['Outage Hours'] = format_duration(diff)
                                 down_row['Outage Hours'] = ""
-                                final_list.append(row); final_list.append(down_row)
-                                i += 2
+                                
+                                final_rows.append(row)
+                                final_rows.append(down_row)
+                                i += 2 # Move past the pair
                             else:
-                                row['Outage Hours'] = ""
-                                final_list.append(row); i += 1
+                                i += 1 # Skip lone 'Cleared'
                         else:
-                            row['Outage Hours'] = ""
-                            final_list.append(row); i += 1
-                
-                # 4. Final Polish
-                final_df = pd.DataFrame(final_list).sort_values('Event Number', ascending=False)
-                final_df.insert(0, 'Sr. No', range(1, len(final_df) + 1))
-                cols = ['Sr. No', 'Event Number', 'Date', 'Time', 'Information', 'Object', 'Outage Hours']
-                final_df = final_df[cols]
-                
-                # 5. Total Summary
-                total_str = format_duration(total_sec)
-                summary = pd.DataFrame([["", "", "", "", "", "TOTAL OUTAGE HOURS:", total_str]], columns=cols)
-                final_df = pd.concat([final_df, summary], ignore_index=True)
+                            i += 1 # Skip lone 'Down'
 
-                st.success(f"Cleaned report for {selected_month} generated!")
-                
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    final_df.to_excel(writer, index=False)
-                st.download_button("📥 Download Excel", data=output.getvalue(), file_name=f"Final_{selected_month}.xlsx")
+                if final_rows:
+                    final_df = pd.DataFrame(final_rows).sort_values('Event Number', ascending=False)
+                    final_df.insert(0, 'Sr. No', range(1, len(final_df) + 1))
+                    
+                    cols = ['Sr. No', 'Event Number', 'Date', 'Time', 'Information', 'Object', 'Outage Hours']
+                    final_df = final_df[cols]
+                    
+                    # 4. Final Summary Row
+                    summary = pd.DataFrame([["", "", "", "", "", "TOTAL OUTAGE HOURS:", format_duration(total_sec)]], columns=cols)
+                    final_df = pd.concat([final_df, summary], ignore_index=True)
+
+                    # Export
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        final_df.to_excel(writer, index=False)
+                    
+                    st.success(f"Cleaned Pairs for {selected_month}!")
+                    st.download_button("📥 Download Perfect Report", data=output.getvalue(), file_name=f"Clean_{selected_month}.xlsx")
+                else:
+                    st.error("No complete Down/Clear pairs found in this month.")
         else:
-            st.warning("No data found.")
-    else:
-        st.error("Header not found.")
+            st.warning("No valid Link events found.")
+            

@@ -4,21 +4,23 @@ import re
 from datetime import datetime
 import io
 
-st.set_page_config(page_title="BSNL Perfect Polisher", layout="centered")
-st.title("📱 BSNL Strict Monthly Polisher")
+st.set_page_config(page_title="BSNL Strict Polisher", layout="centered")
+st.title("📱 BSNL Zero-Garbage Polisher")
 
 def format_duration(seconds):
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     return f"{int(h):02}:{int(m):02}:{int(s):02}"
 
-if st.button("🔄 Reset App"):
+# 1. Clear Cache Button
+if st.button("🔄 Full Reset"):
     st.cache_data.clear()
     st.rerun()
 
 uploaded_file = st.file_uploader("Upload Raw BSNL File", type=['xlsx', 'csv'])
 
 if uploaded_file:
+    # Handle File Types
     if uploaded_file.name.endswith('.csv'):
         content = uploaded_file.getvalue().decode('utf-8', errors='ignore')
         lines = content.splitlines()
@@ -26,6 +28,7 @@ if uploaded_file:
         raw_df = pd.read_excel(uploaded_file, header=None)
         lines = raw_df[0].astype(str).tolist()
 
+    # Find Header
     header_idx = -1
     for i, line in enumerate(lines):
         if "#" in line and "Time" in line and "Information" in line:
@@ -54,64 +57,66 @@ if uploaded_file:
             months = sorted(full_df['MonthYear'].unique(), key=lambda x: datetime.strptime(x, '%B %Y'), reverse=True)
             selected_month = st.selectbox("📅 Select Month:", months)
             
-            if st.button("🚀 Generate Perfect Pairs"):
-                # 1. Monthly Filter
+            if st.button("🚀 Generate Final Accurate Report"):
+                # Filter for the specific month
                 df_m = full_df[full_df['MonthYear'] == selected_month].copy()
                 
-                # 2. Strict State Transition (Remove same-status duplicates)
+                # --- THE STICKY FILTER ---
+                # Sort by Port and Time to see sequence
                 df_m = df_m.sort_values(['Object', 'dt'], ascending=True)
+                
+                # Step A: Delete repeated states (e.g. Down followed immediately by another Down)
                 df_m['prev_info'] = df_m.groupby('Object')['Information'].shift(1)
-                df_filtered = df_m[df_m['Information'] != df_m['prev_info']].copy()
+                df_clean = df_m[df_m['Information'] != df_m['prev_info']].copy()
 
-                final_rows = []
+                final_paired_list = []
                 total_sec = 0
                 
-                # 3. Strict Pairing Engine (Keep ONLY Completed Pairs)
-                for obj_name, group in df_filtered.groupby('Object'):
+                # Step B: STRICT PAIRING (Delete any event that doesn't have a partner)
+                for port, group in df_clean.groupby('Object'):
                     group = group.sort_values('dt', ascending=False)
                     i = 0
-                    while i < len(group):
-                        row = group.iloc[i].copy()
-                        # Only start if we find a 'Cleared' event
-                        if row['Information'] == "Cleared Link Down":
-                            if i + 1 < len(group) and group.iloc[i+1]['Information'] == "Link Down":
-                                down_row = group.iloc[i+1].copy()
-                                
-                                # Math for duration
-                                diff = int((row['dt'] - down_row['dt']).total_seconds())
-                                total_sec += diff
-                                
-                                row['Outage Hours'] = format_duration(diff)
-                                down_row['Outage Hours'] = ""
-                                
-                                final_rows.append(row)
-                                final_rows.append(down_row)
-                                i += 2 # Move past the pair
-                            else:
-                                i += 1 # Skip lone 'Cleared'
+                    while i < (len(group) - 1):
+                        current_row = group.iloc[i].copy()
+                        next_row = group.iloc[i+1].copy()
+                        
+                        # Only keep if we have a CLEAR followed immediately by a DOWN
+                        if current_row['Information'] == "Cleared Link Down" and next_row['Information'] == "Link Down":
+                            # Calculate Outage
+                            diff = int((current_row['dt'] - next_row['dt']).total_seconds())
+                            total_sec += diff
+                            
+                            current_row['Outage Hours'] = format_duration(diff)
+                            next_row['Outage Hours'] = ""
+                            
+                            final_paired_list.append(current_row)
+                            final_paired_list.append(next_row)
+                            i += 2 # Move past this perfect pair
                         else:
-                            i += 1 # Skip lone 'Down'
+                            i += 1 # Skip lone event (it gets deleted because it's not added to list)
 
-                if final_rows:
-                    final_df = pd.DataFrame(final_rows).sort_values('Event Number', ascending=False)
+                if final_paired_list:
+                    # Final Sort (Latest first)
+                    final_df = pd.DataFrame(final_paired_list).sort_values('Event Number', ascending=False)
                     final_df.insert(0, 'Sr. No', range(1, len(final_df) + 1))
                     
+                    # Columns selection
                     cols = ['Sr. No', 'Event Number', 'Date', 'Time', 'Information', 'Object', 'Outage Hours']
                     final_df = final_df[cols]
                     
-                    # 4. Final Summary Row
+                    # Add Total Row
                     summary = pd.DataFrame([["", "", "", "", "", "TOTAL OUTAGE HOURS:", format_duration(total_sec)]], columns=cols)
                     final_df = pd.concat([final_df, summary], ignore_index=True)
 
-                    # Export
+                    st.success(f"Report Generated: {len(final_df)-1} paired events found.")
+                    
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                         final_df.to_excel(writer, index=False)
                     
-                    st.success(f"Cleaned Pairs for {selected_month}!")
-                    st.download_button("📥 Download Perfect Report", data=output.getvalue(), file_name=f"Clean_{selected_month}.xlsx")
+                    st.download_button("📥 Download Final Correct Excel", data=output.getvalue(), file_name=f"Final_{selected_month}.xlsx")
                 else:
-                    st.error("No complete Down/Clear pairs found in this month.")
+                    st.error("No valid completed pairs found for this month.")
         else:
-            st.warning("No valid Link events found.")
+            st.warning("No data found.")
             
